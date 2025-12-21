@@ -1,4 +1,4 @@
-from WebSearchEngineMetric.RawDataReader.AutoUpdateCSVRawDataReader import AutoUpdateRawDataReader
+from Metric.RawDataReader.AutoUpdateCSVRawDataReader import AutoUpdateRawDataReader
 import random
 
 

@@ -1,5 +1,5 @@
-from Measure.Measure import Measure
-from Dataset.Dataset import Dataset
+from Metric.Measure.Measure import Measure
+from Metric.Dataset.Dataset import Dataset
 import typesense
 from tqdm import tqdm
 import os

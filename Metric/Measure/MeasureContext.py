@@ -1,4 +1,4 @@
-from Measure.Measure import Measure
+from Metric.Measure.Measure import Measure
 
 class MeasureContext:
     def __init__(self):

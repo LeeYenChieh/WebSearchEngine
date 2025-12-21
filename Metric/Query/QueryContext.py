@@ -1,5 +1,5 @@
-from Dataset.Dataset import Dataset
-from Query.QueryStrategy import QueryStrategy
+from Metric.Dataset.Dataset import Dataset
+from Metric.Query.QueryStrategy import QueryStrategy
 
 class QueryContext:
     def __init__(self):

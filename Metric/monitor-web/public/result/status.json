@@ -1049,5 +1049,10 @@
                "offer_error": 0,
                "maintenance_error": 0
           }
+     },
+     "2025-12-22": {
+          "discovered": 54432481,
+          "crawled": 7945369,
+          "indexed": 268021
      }
 }

@@ -1,8 +1,8 @@
-from Dataset.Dataset import Dataset
-from Dataset.CSVDataset import CSVDataset
-from Dataset.AutoDateCSVDataset import AutoDateCSVDataset
-from Dataset.JsonDataset import JsonDataset
-from Dataset.AutoDateJsonDataset import AutoDateJsonDataset
+from Metric.Dataset.Dataset import Dataset
+from Metric.Dataset.CSVDataset import CSVDataset
+from Metric.Dataset.AutoDateCSVDataset import AutoDateCSVDataset
+from Metric.Dataset.JsonDataset import JsonDataset
+from Metric.Dataset.AutoDateJsonDataset import AutoDateJsonDataset
 import os
 
 class DatasetFactory:

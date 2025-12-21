@@ -1,5 +1,5 @@
-from Query.QueryStrategy import QueryStrategy
-from Dataset.Dataset import Dataset
+from Metric.Query.QueryStrategy import QueryStrategy
+from Metric.Dataset.Dataset import Dataset
 from tqdm import tqdm
 
 

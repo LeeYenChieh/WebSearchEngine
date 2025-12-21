@@ -25,8 +25,7 @@ def process_single_table(table_index, db_url):
     
     sql_alter = text(f"""
         ALTER TABLE {table_name} 
-        ADD COLUMN IF NOT EXISTS indexed INTEGER DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS reason VARCHAR DEFAULT '';
+        DROP COLUMN IF EXISTS reason;
     """)
 
     max_retries = 10
@@ -59,7 +58,7 @@ def main():
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {
             executor.submit(process_single_table, i, DATABASE_URL): i 
-            for i in [13]
+            for i in range(256)
         }
         
         success_count = 0

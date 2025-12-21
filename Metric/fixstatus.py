@@ -1,4 +1,4 @@
-from Dataset.DatasetFactory import DatasetFactory
+from Metric.Dataset.DatasetFactory import DatasetFactory
 
 
 dataset = DatasetFactory().getDataset('status.json')

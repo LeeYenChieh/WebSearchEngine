@@ -1,17 +1,17 @@
-from Measure.Measure import Measure
-from Dataset.Dataset import Dataset
-from Dataset.DatasetFactory import DatasetFactory
+from Metric.Measure.Measure import Measure
+from Metric.Dataset.Dataset import Dataset
+from Metric.Dataset.DatasetFactory import DatasetFactory
 
-from Measure.CrawlerAllMetricMeasure import CrawlerAllMetricMeasure
-from Measure.TypesenseRankMeasure import TypesenseRankMeasure
+from Metric.Measure.CrawlerAllMetricMeasure import CrawlerAllMetricMeasure
+from Metric.Measure.TypesenseRankMeasure import TypesenseRankMeasure
 from tqdm import tqdm
 import os
 
 class SearchEngineAllMetricMeasure(Measure):
-    def __init__(self, dataset: Dataset, crawler_url, typesense_url, resultDataset: Dataset):
+    def __init__(self, dataset: Dataset, db, typesense_url, resultDataset: Dataset):
         super().__init__()
         self.dataset = dataset
-        self.crawler_url = crawler_url
+        self.db = db
         self.typesense_url = typesense_url
         self.resultDataset = resultDataset
         self.resultDataset.clear()
@@ -19,7 +19,7 @@ class SearchEngineAllMetricMeasure(Measure):
     def test(self):
         crawlerTempDataset = DatasetFactory().getDataset('crawler_temp.json')
         typesenseTempDataset = DatasetFactory().getDataset('typesense_temp.json')
-        CrawlerAllMetricMeasure(self.dataset, self.crawler_url, crawlerTempDataset).test()
+        CrawlerAllMetricMeasure(self.dataset, self.db, crawlerTempDataset).test()
         TypesenseRankMeasure(self.dataset, self.typesense_url, typesenseTempDataset).test()
 
         os.remove('crawler_temp.json')
