@@ -10,13 +10,13 @@ from Database.Database import Database
 from models import create_url_state_model, UrlStateMixin
 
 # Chain Handlers
-from Chain.Handler import Handler
-from Chain.PipelineResult import PipelineResult
-from Chain.ContentRead import ContentRead
-from Chain.ExtractionJson import ExtractionJson
-from Chain.QualityFilter import QualityFilter
-from Chain.Scoring import Scoring
-from Chain.Ingestion import Ingestion
+from IndexSelection.Chain.Handler import Handler
+from IndexSelection.Chain.PipelineResult import PipelineResult
+from IndexSelection.Chain.ContentRead import ContentRead
+from IndexSelection.Chain.ExtractionJson import ExtractionJson
+from IndexSelection.Chain.QualityFilter import QualityFilter
+from IndexSelection.Chain.Scoring import Scoring
+from IndexSelection.Chain.Ingestion import Ingestion
 
 def parseArgs():
     parser = ArgumentParser()
