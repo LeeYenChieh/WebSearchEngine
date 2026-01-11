@@ -1051,8 +1051,23 @@
           }
      },
      "2025-12-22": {
-          "discovered": 54432481,
-          "crawled": 7945369,
-          "indexed": 268021
+          "discovered": 55574604,
+          "crawled": 8101453,
+          "indexed": 452681
+     },
+     "2025-12-25": {
+          "discovered": 106763545,
+          "crawled": 15440973,
+          "indexed": 452681
+     },
+     "2025-12-29": {
+          "discovered": 130352293,
+          "crawled": 18664758,
+          "indexed": 452681
+     },
+     "2025-12-30": {
+          "discovered": 136644801,
+          "crawled": 19650141,
+          "indexed": 452681
      }
 }

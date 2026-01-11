@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 # Database
 from Database.Database import Database
-from models import create_url_state_model, UrlStateMixin
+from WebSearchEngine.Database.CrawlerModels import create_url_state_model, UrlStateMixin
 
 # Chain Handlers
 from IndexSelection.Chain.Handler import Handler
