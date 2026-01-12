@@ -1,10 +1,6 @@
-from Metric.Dataset.Dataset import Dataset
-from Metric.Dataset.DatasetFactory import DatasetFactory
-
 from Metric.RawDataReader.RawDataReader import RawDataReader
-from Metric.RawDataReader.CSVFileRawDataReader import CSVFileRawDataReader
-from Metric.RawDataReader.AutoUpdateJsonRawDataReader import AutoUpdateJsonRawDataReader
-from Metric.RawDataReader.AutoUpdateCSVRawDataReader import AutoUpdateCSVRawDataReader
+from Metric.RawDataReader.DatabaseRawDataReader import DatabaseRawDataReader
+
 
 from Metric.Query.QueryContext import QueryContext
 from Metric.Query.RandomQueryStrategy import RandomQueryStrategy
@@ -16,8 +12,6 @@ from Metric.Measure.CrawlerAllMetricMeasure import CrawlerAllMetricMeasure
 from Metric.Measure.SearchEngineAllMetricMeasure import SearchEngineAllMetricMeasure
 from Metric.Measure.CrawlerStatusMeasure import CrawlerStatusMeasure
 
-from Metric.utils.getLastest import get_latest_dataset_file
-
 from Database.Database import Database
 from Database.CrawlerModels import Base as CrawlerBase
 from Database.MetricModels import Base as MetricBase
@@ -28,25 +22,41 @@ from argparse import ArgumentParser
 
 import os
 
+from sqlalchemy import select, desc
+
+def get_latest_batch_id(db, modelFactory) -> int:
+    """
+    獲取最新 MetricBatch 的 ID。
+    回傳: int (若表為空則回傳 None)
+    """
+    MetricBatch = modelFactory.create_metric_batches()
+    
+    with db.session() as session:
+        # 1. 只選取 id 欄位 (Scalar Select) -> 節省記憶體與傳輸頻寬
+        # 2. 根據 id 倒序排列 (利用 PK Index) -> 極速
+        # 3. 取第一筆
+        stmt = select(MetricBatch.id).order_by(MetricBatch.id.desc()).limit(1)
+        
+        # scalar() 會直接回傳數值 (int) 或 None
+        latest_id = session.execute(stmt).scalar()
+        
+        return latest_id
+
 def parseArgs():
     parser = ArgumentParser()
 
-    parser.add_argument("--datadir", help="Metric data dir path")
     parser.add_argument("--strategy", nargs='+', choices=['random', 'head'], default=[], help="raw data path")
-    parser.add_argument("--measure", nargs='+', choices=['status', 'rank', 'crawler_all', 'all'], help="raw data path")
+    parser.add_argument("--crawler_db_url", help="crawler url")
+    parser.add_argument("--metric_db_url", help="crawler url")
 
     parser.add_argument("--create", action='store_true', help="create dataset")
-    parser.add_argument("--rawdatareader", choices=['csvfile', 'json', 'csv'], help="raw data reader strategy")
-    parser.add_argument("--rawdatapath", help="Raw data path")
-    parser.add_argument("--rawdatadir", default='.', help="Auto generator raw data dir")
+    parser.add_argument("--rawdatareader", choices=['db'], default='db', help="raw data reader strategy")
     parser.add_argument("--update", type=int, default=14, help="auto generator days")
     parser.add_argument("--keywordNums", type=int, default=100, help="Metric Data Keyword Nums")
 
     parser.add_argument("--test", action='store_true', help="test performance")
-    parser.add_argument("--crawler_db_url", help="crawler url")
-    parser.add_argument("--metric_db_url", help="crawler url")
     parser.add_argument("--typesense_url", help="typesense url")
-    parser.add_argument("--resultdir", help="Result Dir")
+    parser.add_argument("--measure", nargs='+', choices=['status', 'rank', 'crawler_all', 'all'], help="raw data path")
 
     parser.add_argument("--createtable", action='store_true', help="create table")
 
@@ -54,63 +64,31 @@ def parseArgs():
     return args
 
 
-def createDataset(args, modelFactory: AppModelFactory, CrawlerDB, MetricDB):
+def createDataset(args, modelFactory: AppModelFactory, crawlerDB, metricDB):
     rawDataReader: RawDataReader = None
-    if args.rawdatareader == "csvfile":
-        rawDataReader = CSVFileRawDataReader(args.rawdatapath)
-    elif args.rawdatareader == "json":
-        rawDataReader = AutoUpdateJsonRawDataReader(args.rawdatadir, args.update)
-    elif args.rawdatareader == "csvs":
-        rawDataReader = AutoUpdateCSVRawDataReader(args.update, args.rawdatadir)
-    rawData = rawDataReader.readData()
+    if args.rawdatareader == "db":
+        rawDataReader = DatabaseRawDataReader(metricDB, modelFactory, args.update)
+    batch_id, rawData = rawDataReader.readData()
 
     context: QueryContext = QueryContext()
 
     if 'random' in args.strategy:
-        dataset: Dataset  = DatasetFactory().getDataset(f'{args.datadir}/random.json', True)
-        context.setQueryStrategy(RandomQueryStrategy(dataset, rawData, args.keywordNums))
+        context.setQueryStrategy(RandomQueryStrategy(metricDB, modelFactory, batch_id, rawData, args.keywordNums))
         context.getGoldenSet()
     if 'head' in args.strategy:
-        dataset: Dataset  = DatasetFactory().getDataset(f'{args.datadir}/head.json', True)
-        context.setQueryStrategy(HeadQueryStrategy(dataset, rawData, args.keywordNums))
+        context.setQueryStrategy(HeadQueryStrategy(metricDB, modelFactory, batch_id, rawData, args.keywordNums))
         context.getGoldenSet()
 
 def test(args, modelFactory: AppModelFactory, crawlerDB, metricDB):
-    dataset: list  = []
-    resultDataset: list  = []
     context: MeasureContext = MeasureContext()
 
-    if 'random' in args.strategy:
-        dataset.append(DatasetFactory().getDataset(get_latest_dataset_file(args.datadir, 'random', '.json')))
-        resultDataset.append({
-            "rank": DatasetFactory().getDataset(f'{args.resultdir}/random_rank.json', True),
-            "crawler_all": DatasetFactory().getDataset(f'{args.resultdir}/random_crawler_all.json', True),
-            "all": DatasetFactory().getDataset(f'{args.resultdir}/random_all.json', True),
-        })
-    if 'head' in args.strategy:
-        dataset.append(DatasetFactory().getDataset(get_latest_dataset_file(args.datadir, 'head', '.json')))
-        resultDataset.append({
-            "rank": DatasetFactory().getDataset(f'{args.resultdir}/head_rank.json', True),
-            "crawler_all": DatasetFactory().getDataset(f'{args.resultdir}/head_crawler_all.json', True),
-            "all": DatasetFactory().getDataset(f'{args.resultdir}/head_all.json', True),
-        })
-
     if 'status' in args.measure:
-        statusResultDataset = DatasetFactory().getDataset(f'{args.resultdir}/status.json')
-        context.setMeasure(CrawlerStatusMeasure(crawlerDB, statusResultDataset))
+        context.setMeasure(CrawlerStatusMeasure(modelFactory, crawlerDB, metricDB))
         context.test()
 
-    if 'rank' in args.measure:
-        for i in range(len(dataset)):
-            context.setMeasure(TypesenseRankMeasure(dataset[i], args.typesense_url, resultDataset[i]["rank"]))
-            context.test()
-    if 'crawler_all' in args.measure:
-        for i in range(len(dataset)):
-            context.setMeasure(CrawlerAllMetricMeasure(dataset[i], crawlerDB, resultDataset[i]["crawler_all"]))
-            context.test()
-    if 'all' in args.measure:
-        for i in range(len(dataset)):
-            context.setMeasure(SearchEngineAllMetricMeasure(dataset[i], crawlerDB, args.typesense_url, resultDataset[i]["all"]))
+    for tag in args.strategy:
+        if 'crawler_all' in args.measure:
+            context.setMeasure(CrawlerAllMetricMeasure(modelFactory, crawlerDB, metricDB, get_latest_batch_id(metricDB, modelFactory), tag))
             context.test()
 
 def main():

@@ -1,4 +1,3 @@
-from Metric.Dataset.Dataset import Dataset
 from Metric.Query.QueryStrategy import QueryStrategy
 
 class QueryContext:

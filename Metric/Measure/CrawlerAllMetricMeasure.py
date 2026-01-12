@@ -1,21 +1,31 @@
 from Metric.Measure.Measure import Measure
-from Metric.Dataset.Dataset import Dataset
 from Database.Database import Database
 from Database.ModelFactory.AppModelFactory import AppModelFactory
-from sqlalchemy import text, select
+from sqlalchemy import select, func, and_
+from sqlalchemy.dialects.postgresql import insert
 from tqdm import tqdm
 import tldextract
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 class CrawlerAllMetricMeasure(Measure):
-    def __init__(self, modelFactory: AppModelFactory, dataset: Dataset, crawlerDB: Database, metricDB: Database, resultDataset: Dataset):
+    def __init__(self, modelFactory: AppModelFactory, crawlerDB: Database, metricDB: Database, batch_id: int, tag: str):
+        """
+        初始化 CrawlerAllMetricMeasure
+        :param modelFactory: 模型工廠
+        :param crawlerDB: 爬蟲資料庫 (讀取 Shard 狀態)
+        :param metricDB: 指標資料庫 (讀取 Golden URL / 寫入覆蓋率)
+        :param batch_id: 指定要評估的 MetricBatch ID
+        :param tag: 指定 Metric 標籤 (例如 'head', 'random')，用來篩選 Golden URLs
+        """
         super().__init__()
-        self.dataset = dataset
         self.modelFactory = modelFactory
         self.crawlerDB: Database = crawlerDB
         self.metricDB: Database = metricDB
-        self.resultDataset = resultDataset
-        self.resultDataset.clear()
+        self.batch_id = batch_id
+        self.tag = tag
+        
+        # 初始化 TLD Extractor (關閉快取避免權限問題)
         self.extractor = tldextract.TLDExtract(cache_dir=False)
     
     def get_domain(self, url: str) -> str:
@@ -28,229 +38,269 @@ class CrawlerAllMetricMeasure(Measure):
             return ""
 
     def _scan_domain_shard(self, shard_ids, domain_tuple):
+        """
+        掃描 CrawlerDB 的 Domain Tables，建立 Domain -> Shard ID 的映射
+        """
         found_map = {}
         with self.crawlerDB.session() as session:
             for i in shard_ids:
                 try:
-                    # 1. 動態取得該分表的 ORM Model Class
                     DomainStats = self.modelFactory.create_domain_stats_model(i)
-
-                    # 2. 建構 ORM 查詢
-                    # 對應 SQL: SELECT domain FROM {table_name} WHERE domain IN :domains
                     stmt = select(DomainStats.domain).where(DomainStats.domain.in_(domain_tuple))
-
-                    # 3. 執行並取得結果
-                    # session.execute(stmt) 回傳的是 Result Proxy
-                    # .scalars() 會自動把每一列的第一個欄位取出來，變成一個 iterator
                     result = session.execute(stmt).scalars()
-
                     for domain in result:
                         found_map[domain] = i
-                        
                 except Exception:
-                    # 忽略表不存在或其他錯誤
                     pass
-                    
         return found_map
 
     def _scan_url_shard(self, shard_ids, url_tuple):
+        """
+        掃描 CrawlerDB 的 Url State Tables，取得 URL 的發現/爬取/索引狀態
+        """
         found_data = [] # List of (url, fetch_ok, indexed, table_id)
         
         with self.crawlerDB.session() as session:
             for i in shard_ids:
                 try:
-                    # 1. 動態建立 ORM Model
                     UrlState = self.modelFactory.create_url_state_model(i)
-
-                    # 2. 建構查詢語句
-                    # 對應 SQL: SELECT url, fetch_ok, indexed FROM table WHERE url IN (...)
+                    # 判斷 URL 是否存在於該分片
                     stmt = select(
                         UrlState.url, 
                         UrlState.fetch_ok, 
                         UrlState.indexed
                     ).where(UrlState.url.in_(url_tuple))
 
-                    # 3. 執行並取得結果
-                    # result 是一組 Row 物件
                     result = session.execute(stmt)
-
                     for row in result:
-                        # row 屬性會對應 select 中的欄位順序或名稱
-                        # 格式: (url, fetch_ok, indexed, shard_id)
                         found_data.append((row.url, row.fetch_ok, row.indexed, i))
-                        
                 except Exception:
-                    # 忽略表不存在或其他錯誤
                     pass
-                    
         return found_data
 
     def test(self):
-        print(f'Start Measuring Crawler (Direct DB - Parallel), data: {self.dataset.path}')
+        """
+        主執行邏輯 (使用 __init__ 傳入的 batch_id 和 tag)
+        """
+        print(f'🚀 Start Measuring Crawler Coverage (Batch: {self.batch_id}, Tag: {self.tag})')
+        today_date = datetime.now().date()
+        
+        # 對應 MetricCoverage 的 Set Type (例如 "head" -> "HeadSet")
+        set_type = f"{self.tag.capitalize()}Set"
 
-        # 1. 收集資料
-        all_golden_urls = set()
+        # ==========================================
+        # 1. 從 MetricDB 讀取 Golden URLs
+        # ==========================================
+        MetricURL = self.modelFactory.create_metric_url()
+        MetricQuery = self.modelFactory.create_metric_queries()
+        
+        # 結構: url_str -> list of MetricURL ID
+        url_id_map = {} 
         all_golden_domains = set()
-        url_to_domain = {}
+        
+        print(f"📥 Loading Golden URLs with tag '{self.tag}'...")
+        with self.metricDB.session() as session:
+            # 透過 Join 篩選：
+            # 1. MetricQuery.batch_id 符合
+            # 2. MetricQuery.tags 包含指定的 tag (使用 JSONB @> 操作符)
+            stmt = select(MetricURL)\
+                .join(MetricQuery)\
+                .where(
+                    and_(
+                        MetricQuery.batch_id == self.batch_id,
+                        MetricQuery.tags.contains([self.tag])
+                    )
+                )
+            
+            
+            results = session.execute(stmt).scalars().all()
+            
+            if not results:
+                print(f"⚠️ No URLs found for Batch {self.batch_id} with tag '{self.tag}'. Exiting.")
+                return
 
-        for keyword in self.dataset.getKeys():
-            urls = self.dataset.get(keyword).get('url', [])
-            for u in urls:
-                all_golden_urls.add(u)
-                domain = self.get_domain(u)
-                url_to_domain[u] = domain
+            for m_url in results:
+                url_str = m_url.url
+                
+                if url_str not in url_id_map:
+                    url_id_map[url_str] = []
+                
+                url_id_map[url_str].append(m_url.id)
+
+                domain = self.get_domain(url_str)
                 if domain:
                     all_golden_domains.add(domain)
-        
-        url_list = list(all_golden_urls)
-        domain_list = list(all_golden_domains)
-        domain_tuple = tuple(domain_list) # 轉成 tuple 供 SQL 使用
-        url_tuple = tuple(url_list)
 
-        # 定義並行參數
-        MAX_WORKERS = 16  # 設定執行緒數量，建議 8~16 之間，視 DB 連線池大小而定
-        SHARDS = range(256)
+        # 準備掃描用的 Tuple
+        url_list = list(url_id_map.keys())
+        domain_list = list(all_golden_domains)
+        url_tuple = tuple(url_list)
+        domain_tuple = tuple(domain_list)
         
-        # 將 256 個表平均分配給 Worker，減少 Context Switch
+        print(f"   Loaded {len(url_list)} unique URLs from {len(domain_list)} domains.")
+
+        # ==========================================
+        # 2. 並行掃描 CrawlerDB (Shards)
+        # ==========================================
+        MAX_WORKERS = 16
         chunk_size = 256 // MAX_WORKERS + 1
         shard_chunks = [range(i, min(i + chunk_size, 256)) for i in range(0, 256, chunk_size)]
 
-        # 2. 並行掃描 Domain Tables
+        # A. 掃描 Domain Tables (為了確定 Shard ID / Team)
         domain_shard_map = {}
-        print(f"Mapping {len(domain_list)} Domains using {MAX_WORKERS} threads...")
-        
+        print(f"🔍 Scanning Domain Tables ({MAX_WORKERS} threads)...")
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # 提交任務
             futures = [executor.submit(self._scan_domain_shard, chunk, domain_tuple) for chunk in shard_chunks]
-            
-            # 收集結果
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Scanning Domains"):
-                result_map = future.result()
-                domain_shard_map.update(result_map)
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Domains"):
+                domain_shard_map.update(future.result())
 
-        # 3. 初始化 URL 狀態
+        # B. 掃描 URL Tables (為了確定 Status)
+        # 初始化 URL 狀態
         url_status_map = {
-            u: {'discovered': False, 'crawled': False, 'indexed': False, 'table_id': -1} 
+            u: {'discovered': False, 'crawled': False, 'indexed': False, 'shard_id': -1} 
             for u in url_list
         }
-
-        # 4. 並行掃描 URL Tables
-        print(f"Scanning 256 URL Tables using {MAX_WORKERS} threads...")
         
+        print(f"🔍 Scanning URL Tables ({MAX_WORKERS} threads)...")
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = [executor.submit(self._scan_url_shard, chunk, url_tuple) for chunk in shard_chunks]
-            
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Scanning URLs"):
+            for future in tqdm(as_completed(futures), total=len(futures), desc="URLs"):
                 results = future.result()
                 for (url, fetch_ok, indexed, shard_id) in results:
                     if url in url_status_map:
                         url_status_map[url]['discovered'] = True
                         url_status_map[url]['crawled'] = (fetch_ok > 0)
                         url_status_map[url]['indexed'] = (indexed == 1)
-                        url_status_map[url]['table_id'] = shard_id
+                        url_status_map[url]['shard_id'] = shard_id
 
-        # 5. 統計與聚合 (邏輯保持不變)
+        # ==========================================
+        # 3. 聚合統計與分組 (Team A / Team B)
+        # ==========================================
+        print("🔄 Aggregating Stats...")
+        
+        # 統計容器：分別統計 Total, Team A, Team B
         stats = {
-            'total':   {'count': 0, 'discover': 0, 'fetch': 0, 'upload': 0},
-            'team_a':  {'count': 0, 'discover': 0, 'fetch': 0, 'upload': 0}, 
-            'team_b':  {'count': 0, 'discover': 0, 'fetch': 0, 'upload': 0},
-            'unknown': {'count': 0, 'discover': 0, 'fetch': 0, 'upload': 0}
+            "Total": {"total": 0, "disc": 0, "crawl": 0, "idx": 0},
+            "A":     {"total": 0, "disc": 0, "crawl": 0, "idx": 0},
+            "B":     {"total": 0, "disc": 0, "crawl": 0, "idx": 0},
         }
+        
+        bulk_update_mappings = []
 
-        example_unknown = None 
-        example_team_a = None
-
-        for keyword in tqdm(self.dataset.getKeys(), desc="Aggregating Results"):
-            keyword_results = []
+        for url_str, ids in url_id_map.items():
+            status = url_status_map.get(url_str, {})
             
-            for goldenurl in self.dataset.get(keyword)['url']:
-                status = url_status_map.get(goldenurl, {})
-                domain = url_to_domain.get(goldenurl, "")
-                
-                table_id = status.get('table_id', -1)
-                # 如果 URL 沒找到表，嘗試用 Domain 找表
-                if table_id == -1:
-                    table_id = domain_shard_map.get(domain, -1)
+            is_disc = status.get('discovered', False)
+            is_crawl = status.get('crawled', False)
+            is_idx = status.get('indexed', False)
+            shard_id = status.get('shard_id', -1)
+            
+            # 如果 URL table 沒找到，嘗試用 Domain table 找 Team
+            if shard_id == -1:
+                domain = self.get_domain(url_str)
+                shard_id = domain_shard_map.get(domain, -1)
 
-                team_key = 'unknown'
-                if 0 <= table_id <= 127:
-                    team_key = 'team_a'
-                elif 128 <= table_id <= 255:
-                    team_key = 'team_b'
-                
-                if team_key == 'unknown' and example_unknown is None:
-                    example_unknown = (goldenurl, domain)
-                
-                if team_key == 'team_a' and example_team_a is None:
-                    example_team_a = (goldenurl, domain)
-
-                is_discovered = status.get('discovered', False)
-                is_crawled = status.get('crawled', False)
-                is_indexed = status.get('indexed', False)
-                
-                stats['total']['count'] += 1
-                stats[team_key]['count'] += 1
-
-                if is_discovered:
-                    stats['total']['discover'] += 1
-                    stats[team_key]['discover'] += 1
-                    if is_crawled: 
-                        stats['total']['fetch'] += 1
-                        stats[team_key]['fetch'] += 1
-                    if is_indexed: 
-                        stats['total']['upload'] += 1
-                        stats[team_key]['upload'] += 1
-
-                keyword_results.append({
-                    'url': goldenurl,
-                    'team': team_key,
-                    'discover_find': is_discovered,
-                    'fetch_find': is_crawled,
-                    'upload_find': is_indexed
+            # 判斷 Team
+            team_key = None
+            if 0 <= shard_id <= 127:
+                team_key = "A"
+            elif 128 <= shard_id <= 255:
+                team_key = "B"
+            
+            # 準備批量更新 MetricURL 的資料
+            for m_id in ids:
+                bulk_update_mappings.append({
+                    "id": m_id,
+                    "is_discovered": is_disc,
+                    "is_crawled": is_crawl,
+                    "is_indexed": is_idx,
+                    "shard_id": shard_id # 記錄找到的 shard，-1 表示未找到
                 })
 
-            if self.resultDataset.get(keyword) is None:
-                self.resultDataset.store(keyword, keyword_results)
-            else:
-                self.resultDataset.get(keyword).extend(keyword_results)
+            # 累加統計 (Team A/B 與 Total)
+            target_groups = ["Total"]
+            if team_key:
+                target_groups.append(team_key)
+            
+            for g in target_groups:
+                stats[g]["total"] += 1
+                if is_disc: stats[g]["disc"] += 1
+                if is_crawl: stats[g]["crawl"] += 1
+                if is_idx:  stats[g]["idx"] += 1
 
-        # 6. 輸出報告 (保持原樣)
-        self._print_report(stats, example_team_a, example_unknown)
-        self.resultDataset.store("__total__", stats)
-        self.resultDataset.dump()
-
-    def _print_report(self, stats, example_team_a, example_unknown):
-        def print_stat(name, data):
-            total = data['count']
-            if total == 0:
-                print(f"[{name}] No Golden URLs found in this group.")
-                return
-            print(f"[{name}] (Total: {total})")
-            print(f"  - Discovered: {data['discover']} ({data['discover']/total:.2%})")
-            print(f"  - Crawled:    {data['fetch']} ({data['fetch']/total:.2%})")
-            print(f"  - Indexed:    {data['upload']} ({data['upload']/total:.2%})")
-            print("-" * 30)
-
-        print("\n" + "="*40)
-        print(f"📊 Evaluation Report")
-        print("="*40)
-        print_stat("Team A (Shards 000-127)", stats['team_a'])
-        if example_team_a:
-            print(f"  🟢 Example Team A: {example_team_a[0]} ({example_team_a[1]})")
-            print("-" * 30)
-
-        print_stat("Team B (Shards 128-255)", stats['team_b'])
+        # ==========================================
+        # 4. 寫入 MetricDB
+        # ==========================================
+        print(f"💾 Saving results to MetricDB...")
         
-        if stats['unknown']['count'] > 0:
-            print_stat("Unknown Team (Domain not in DB)", stats['unknown'])
-            if example_unknown:
-                print(f"  🔴 Example Unknown: {example_unknown[0]} ({example_unknown[1]})")
-                print("-" * 30)
+        with self.metricDB.session() as session:
+            # A. 更新 MetricURL 詳細狀態
+            if bulk_update_mappings:
+                session.bulk_update_mappings(MetricURL, bulk_update_mappings)
+            
+            # B. 寫入 MetricCoverage 統計表 (Total, A, B)
+            suffixes = ["Total", "A", "B"]
+            
+            for suffix in suffixes:
+                d = stats[suffix]
+                total_count = d["total"]
+                
+                try:
+                    ModelClass = self.modelFactory.create_metric_coverage_model(set_type, suffix)
+                except Exception as e:
+                    print(f"   [Warning] Could not create model for {set_type}_{suffix}: {e}")
+                    continue
 
-        print(f"[Total Performance] (Total: {stats['total']['count']})")
-        # 避免除以零錯誤
-        total = stats['total']['count'] if stats['total']['count'] > 0 else 1
-        print(f"  - Discovered: {stats['total']['discover']} ({stats['total']['discover']/total:.2%})")
-        print(f"  - Fetch:      {stats['total']['fetch']} ({stats['total']['fetch']/total:.2%})")
-        print(f"  - Upload:     {stats['total']['upload']} ({stats['total']['upload']/total:.2%})")
-        print("="*40)
+                row_data = {
+                    "stat_date": today_date,
+                    "total": total_count,
+                    "discovered_num": d["disc"],
+                    "discovered_rate": d["disc"] / total_count if total_count > 0 else 0.0,
+                    "crawled_num": d["crawl"],
+                    "crawled_rate": d["crawl"] / total_count if total_count > 0 else 0.0,
+                    "indexed_num": d["idx"],
+                    "indexed_rate": d["idx"] / total_count if total_count > 0 else 0.0,
+                    "ranked_num": 0,
+                    "ranked_rate": 0.0
+                }
+
+                stmt = insert(ModelClass).values(row_data)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=['stat_date'],
+                    set_=row_data
+                )
+                session.execute(stmt)
+            
+            session.commit()
+            print("✅ MetricDB Updated Successfully.")
+
+        # ==========================================
+        # 5. 輸出報告
+        # ==========================================
+        self._print_report(stats)
+
+    def _print_report(self, stats):
+        print("\n" + "="*60)
+        print(f"📊 Coverage Report - Tag: {self.tag}")
+        print("="*60)
+        
+        headers = f"{'Group':<12} | {'Total':>8} | {'Disc %':>10} | {'Crawl %':>10} | {'Index %':>10}"
+        print(headers)
+        print("-" * len(headers))
+        
+        groups = ["Total", "A", "B"]
+        
+        for g in groups:
+            d = stats[g]
+            total = d['total']
+            if total == 0:
+                print(f"{g:<12} | {0:>8} | {'N/A':>10} | {'N/A':>10} | {'N/A':>10}")
+                continue
+                
+            disc_rate = d['disc'] / total
+            crawl_rate = d['crawl'] / total
+            idx_rate = d['idx'] / total
+            
+            print(f"{g:<12} | {total:>8,} | {disc_rate:>9.1%} | {crawl_rate:>9.1%} | {idx_rate:>9.1%}")
+        
+        print("="*60)

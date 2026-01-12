@@ -1,11 +1,9 @@
-from Metric.Dataset.Dataset import Dataset
 from serpapi import GoogleSearch
 import time
 import os
 
 class QueryStrategy:
-    def __init__(self, dataset: Dataset, rawData: list, keywordNums: int):
-        self.dataset: Dataset = dataset
+    def __init__(self, rawData: list, keywordNums: int):
         self.rawData: list = rawData
         self.keywordNums: int = keywordNums
 
