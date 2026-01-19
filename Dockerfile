@@ -32,6 +32,7 @@ RUN echo "SERPAPI_KEY=$SERPAPI_KEY" >> /etc/environment
 RUN echo "\
 # 每小時執行一次 (Status) \n\
 0 * * * * cd /root/WebSearchEngine && /root/system-venv/bin/python3 measure.py --test --metric_db_url ws2.csie.ntu.edu.tw:22215 --crawler_db ws2.csie.ntu.edu.tw:22224 --measure status >> /var/log/cron.log 2>&1 \n\
+0 * * * * cd /root/WebSearchEngine && /root/system-venv/bin/python3 migrate.py >> /var/log/cron.log 2>&1 \n\
 # 每月 1 號與 16 號 中午 12 點 (Strategy: random) \n\
 0 12 1,16 * * cd /root/WebSearchEngine && /root/system-venv/bin/python3 measure.py --create --metric_db_url ws2.csie.ntu.edu.tw:22215 --crawler_db_url ws2.csie.ntu.edu.tw:22224 --strategy random --keywordNums 1000 --test --measure crawler_all >> /var/log/cron.log 2>&1 \n\
 # 每月 1 號與 16 號 下午 6 點 (Strategy: head) \n\
