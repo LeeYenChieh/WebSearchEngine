@@ -1,5 +1,5 @@
 # 1. 使用 Ubuntu 作為基底
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 # 避免安裝過程中的互動式提問
 ENV DEBIAN_FRONTEND=noninteractive
