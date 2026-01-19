@@ -23,11 +23,11 @@ RUN /root/system-venv/bin/pip install --upgrade pip && \
 
 # 5. 設定環境變數
 # 您可以在編譯時指定，或是在執行時透過 -e 傳入
-ENV SERP_API_KEY="YOUR_ACTUAL_API_KEY_HERE"
+ENV SERPAPI_KEY="YOUR_ACTUAL_API_KEY_HERE"
 
 # 6. 設定 Crontab
 # 注意：cron 預設環境乾淨，需要手動指定路徑與環境變數
-RUN echo "SERP_API_KEY=$SERP_API_KEY" >> /etc/environment
+RUN echo "SERPAPI_KEY=$SERPAPI_KEY" >> /etc/environment
 
 RUN echo "\
 # 每小時執行一次 (Status) \n\
