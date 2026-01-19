@@ -59,7 +59,7 @@ class DatabaseRawDataReader(RawDataReader):
 
         # 2. 資料過期或不存在，執行爬蟲並存檔
         print("Fetch Trending Query from SerpApi...")
-        return latest_batch.id, self._fetch_from_api_process_and_store()
+        return self._fetch_from_api_process_and_store()
 
     def _fetch_from_db(self, batch_id: int) -> list:
         """
@@ -101,8 +101,9 @@ class DatabaseRawDataReader(RawDataReader):
             if kw not in merged_dict:
                 # 第一次出現：
                 # 為了配合 DB JSONB，將 'US' 轉為 ['US']
-                item['geo'] = [item['geo']]
-                merged_dict[kw] = item
+                new_item = item.copy()
+                new_item['geo'] = [item['geo']]
+                merged_dict[kw] = new_item
             else:
                 # 已經存在：
                 # 合併 Geo List (避免重複)

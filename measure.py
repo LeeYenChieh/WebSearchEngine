@@ -68,7 +68,8 @@ def createDataset(args, modelFactory: AppModelFactory, crawlerDB, metricDB):
     rawDataReader: RawDataReader = None
     if args.rawdatareader == "db":
         rawDataReader = DatabaseRawDataReader(metricDB, modelFactory, args.update)
-    batch_id, rawData = rawDataReader.readData()
+    rawData = rawDataReader.readData()
+    batch_id = get_latest_batch_id(metricDB, modelFactory)
 
     context: QueryContext = QueryContext()
 
